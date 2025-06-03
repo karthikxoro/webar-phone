@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera 3D Model Viewer</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@latest/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@latest/examples/js/loaders/GLTFLoader.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: black;
+            font-family: Arial, sans-serif;
+        }
+        
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #video {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 1;
+        }
+        
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 2;
+            pointer-events: none;
+        }
+        
+        #controls {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 3;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        #fileInput {
+            margin-bottom: 10px;
+            color: white;
+        }
+        
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px 0;
+            display: block;
+        }
+        
+        button:hover {
+            background: #0056b3;
+        }
+        
+        button:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        
+        #status {
+            color: white;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="canvas"></canvas>
+        
+        <div id="controls">
+            <input type="file" id="fileInput" accept=".glb,.gltf" />
+            <button id="startCamera">Start Camera</button>
+            <button id="switchCamera" disabled>Switch Camera</button>
+            <div id="status">Upload GLB model and start camera</div>
+        </div>
+    </div>
+
+    <script>
+        class Camera3DViewer {
+            constructor() {
+                this.video = document.getElementById('video');
+                this.canvas = document.getElementById('canvas');
+                this.fileInput = document.getElementById('fileInput');
+                this.startCameraBtn = document.getElementById('startCamera');
+                this.switchCameraBtn = document.getElementById('switchCamera');
+                this.status = document.getElementById('status');
+                
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.model = null;
+                this.currentStream = null;
+                this.currentCamera = 'user'; // 'user' for front, 'environment' for back
+                this.modelLoaded = false;
+                
+                this.init();
+                this.setupEventListeners();
+            }
+            
+            init() {
+                // Initialize Three.js
+                this.scene = new THREE.Scene();
+                
+                // Setup camera
+                this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.z = 5;
+                
+                // Setup renderer
+                this.renderer = new THREE.WebGLRenderer({ 
+                    canvas: this.canvas, 
+                    alpha: true,
+                    antialias: true 
+                });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setClearColor(0x000000, 0); // Transparent background
+                
+                // Add lighting
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(10, 10, 5);
+                this.scene.add(directionalLight);
+                
+                // Handle window resize
+                window.addEventListener('resize', () => this.onWindowResize());
+                
+                this.animate();
+            }
+            
+            setupEventListeners() {
+                this.fileInput.addEventListener('change', (e) => this.handleFileUpload(e));
+                this.startCameraBtn.addEventListener('click', () => this.startCamera());
+                this.switchCameraBtn.addEventListener('click', () => this.switchCamera());
+            }
+            
+            async handleFileUpload(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+                
+                this.updateStatus('Loading 3D model...');
+                
+                try {
+                    const url = URL.createObjectURL(file);
+                    await this.loadGLBModel(url);
+                    this.modelLoaded = true;
+                    this.updateStatus('Model loaded! Start camera to view.');
+                    URL.revokeObjectURL(url);
+                } catch (error) {
+                    this.updateStatus('Error loading model: ' + error.message);
+                    console.error('Error loading GLB:', error);
+                }
+            }
+            
+            async loadGLBModel(url) {
+                return new Promise((resolve, reject) => {
+                    // Remove existing model
+                    if (this.model) {
+                        this.scene.remove(this.model);
+                        this.model = null;
+                    }
+                    
+                    const loader = new THREE.GLTFLoader();
+                    
+                    loader.load(
+                        url,
+                        (gltf) => {
+                            // Successfully loaded GLB
+                            this.model = gltf.scene;
+                            
+                            // Scale and position the model appropriately
+                            const box = new THREE.Box3().setFromObject(this.model);
+                            const size = box.getSize(new THREE.Vector3()).length();
+                            const center = box.getCenter(new THREE.Vector3());
+                            
+                            // Scale model to reasonable size
+                            this.model.scale.setScalar(2 / size);
+                            
+                            // Center the model
+                            this.model.position.x = -center.x * (2 / size);
+                            this.model.position.y = -center.y * (2 / size);
+                            this.model.position.z = -center.z * (2 / size);
+                            
+                            this.scene.add(this.model);
+                            resolve();
+                        },
+                        (progress) => {
+                            // Loading progress
+                            const percent = Math.round((progress.loaded / progress.total) * 100);
+                            this.updateStatus(`Loading model: ${percent}%`);
+                        },
+                        (error) => {
+                            // Error loading
+                            console.error('Error loading GLB:', error);
+                            reject(error);
+                        }
+                    );
+                });
+            }
+            
+            async startCamera() {
+                try {
+                    this.updateStatus('Starting camera...');
+                    
+                    const constraints = {
+                        video: {
+                            facingMode: this.currentCamera === 'back' ? 'environment' : 'user',
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        },
+                        audio: false
+                    };
+                    
+                    // Stop existing stream
+                    if (this.currentStream) {
+                        this.currentStream.getTracks().forEach(track => track.stop());
+                    }
+                    
+                    this.currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    this.video.srcObject = this.currentStream;
+                    
+                    this.startCameraBtn.textContent = 'Stop Camera';
+                    this.startCameraBtn.onclick = () => this.stopCamera();
+                    this.switchCameraBtn.disabled = false;
+                    
+                    this.updateStatus(`Camera started (${this.currentCamera === 'back' ? 'Back' : 'Front'} camera)`);
+                    
+                } catch (error) {
+                    this.updateStatus('Error accessing camera: ' + error.message);
+                    console.error('Camera error:', error);
+                }
+            }
+            
+            stopCamera() {
+                if (this.currentStream) {
+                    this.currentStream.getTracks().forEach(track => track.stop());
+                    this.currentStream = null;
+                }
+                
+                this.video.srcObject = null;
+                this.startCameraBtn.textContent = 'Start Camera';
+                this.startCameraBtn.onclick = () => this.startCamera();
+                this.switchCameraBtn.disabled = true;
+                
+                this.updateStatus('Camera stopped');
+            }
+            
+            async switchCamera() {
+                this.currentCamera = this.currentCamera === 'user' ? 'environment' : 'user';
+                if (this.currentStream) {
+                    await this.startCamera();
+                }
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                // Rotate the model if it exists
+                if (this.model && this.modelLoaded) {
+                    this.model.rotation.y += 0.01;
+                }
+                
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+            
+            updateStatus(message) {
+                this.status.textContent = message;
+            }
+        }
+        
+        // Initialize the application
+        const app = new Camera3DViewer();
+        
+        // Set default to back camera
+        app.currentCamera = 'environment';
+    </script>
+</body>
+</html>
