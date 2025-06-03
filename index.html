@@ -3,8 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script src="https://cdn.jsdelivr.net/npm/three@latest/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@latest/examples/js/loaders/GLTFLoader.js"></script>
     <title>Camera 3D Model Viewer</title>
     <style>
         * {
@@ -147,9 +145,26 @@
                 const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
                 this.scene.add(ambientLight);
                 
-                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                directionalLight.position.set(10, 10, 5);
-                this.scene.add(directionalLight);
+                // Main directional light (key light)
+                const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1.5);
+                directionalLight1.position.set(10, 10, 5);
+                directionalLight1.castShadow = true;
+                this.scene.add(directionalLight1);
+                
+                // Secondary directional light (fill light)
+                const directionalLight2 = new THREE.DirectionalLight(0xffffff, 1.2);
+                directionalLight2.position.set(-10, 5, 5);
+                this.scene.add(directionalLight2);
+                
+                // Back light for rim lighting
+                const directionalLight3 = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight3.position.set(0, 0, -10);
+                this.scene.add(directionalLight3);
+                
+                // Additional side lights
+                const directionalLight4 = new THREE.DirectionalLight(0xffffff, 0.6);
+                directionalLight4.position.set(0, 10, 0);
+                this.scene.add(directionalLight4);
                 
                 // Handle window resize
                 window.addEventListener('resize', () => this.onWindowResize());
@@ -214,7 +229,7 @@
                                 
                                 // Scale the model to fit in view
                                 const maxDim = Math.max(size.x, size.y, size.z);
-                                const scale = 2 / maxDim;
+                                const scale = 5 / maxDim;
                                 this.model.scale.setScalar(scale);
                                 
                                 this.scene.add(this.model);
@@ -311,8 +326,8 @@
                 
                 // Rotate the model if it exists and is visible
                 if (this.model && this.modelVisible) {
-                    this.model.rotation.y += 0.01;
-                    this.model.rotation.x += 0.005;
+                    this.model.rotation.y += 0.00;
+                    this.model.rotation.x += 0.000;
                 }
                 
                 this.renderer.render(this.scene, this.camera);
