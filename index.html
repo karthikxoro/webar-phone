@@ -679,7 +679,7 @@
                 this.model.position.copy(surface.position);
                 
                 // Align model with surface normal
-                const up = new THREE.Vector3(0, 1, 0);
+                const up = new THREE.Vector3(0, 1, -1);
                 const quaternion = new THREE.Quaternion().setFromUnitVectors(up, surface.normal);
                 this.model.quaternion.copy(quaternion);
                 
