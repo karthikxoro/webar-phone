@@ -684,9 +684,12 @@
                 this.model.quaternion.copy(quaternion);
                 
                 // Slightly raise model above surface
-                const offset = surface.normal.clone().multiplyScalar(0.1);
-                this.model.position.add(offset);
+                // const offset = surface.normal.clone().multiplyScalar(0.1);
+                // this.model.position.add(offset);
                 
+                const offset = surface.normal.clone().multiplyScalar(0.1);
+this.model.position.add(offset);
+
                 // Make model visible
                 this.model.visible = true;
                 this.modelVisible = true;
@@ -751,10 +754,10 @@
                 this.surfaceMap.clear();
                 this.frameCount = 0;
                 
-                if (this.model) {
-                    this.model.visible = false;
-                    this.modelVisible = false;
-                }
+               if (this.model) {
+    this.model.visible = false;
+    this.model.position.set(0, 0, 0); // Ensures it's placed at ground level
+}
                 
                 // Remove all surface points
                 const points = document.querySelectorAll('.surface-point');
@@ -804,6 +807,10 @@
                 this.debugCtx.strokeStyle = '#00ff00';
                 this.debugCtx.fillStyle = '#00ff0040';
                 this.debugCtx.lineWidth = 1;
+
+                if (surface.position.y < 0.2) { // Consider low-altitude surfaces as floor
+    this.debugCtx.fillStyle = '#ff000040'; // Different color for floor surfaces
+}
                 
                 let surfaceCount = 0;
                 for (const [key, surface] of this.surfaceMap.entries()) {
@@ -859,6 +866,9 @@
             onTouchMove(event) {
                 event.preventDefault();
                 // Handle touch move for model rotation if needed
+                const up = new THREE.Vector3(0, 1, 0); // Force flat alignment
+const quaternion = new THREE.Quaternion().setFromUnitVectors(up, surface.normal);
+this.model.quaternion.copy(quaternion);
                 if (event.touches.length === 1 && this.model && this.model.visible) {
                     const touch = event.touches[0];
                     
