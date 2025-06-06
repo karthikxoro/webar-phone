@@ -291,7 +291,9 @@
                 this.floorStatus = document.getElementById('floorStatus');
                 this.floorConfidence = document.getElementById('floorConfidence');
                 this.floorDistance = document.getElementById('floorDistance');
-                
+                // ...inside ARFloorDetector constructor...
+this.surfaceMap = new Map();
+// ...existing code...
                 this.scene = null;
                 this.camera = null;
                 this.renderer = null;
@@ -1035,51 +1037,54 @@ this.model.position.add(offset);
                 }
             }
 
-            updateDebugVisualization() {
-                const debugWidth = this.debugCanvas.width = 200;
-                const debugHeight = this.debugCanvas.height = 150;
-                
-                this.debugCtx.drawImage(this.video, 0, 0, debugWidth, debugHeight);
-                
-                // Draw detected surfaces
-                this.debugCtx.strokeStyle = '#00ff00';
-                this.debugCtx.fillStyle = '#00ff0040';
-                this.debugCtx.lineWidth = 1;
+           updateDebugVisualization() {
+    const debugWidth = this.debugCanvas.width = 200;
+    const debugHeight = this.debugCanvas.height = 150;
+    
+    this.debugCtx.drawImage(this.video, 0, 0, debugWidth, debugHeight);
+    
+    // Draw detected surfaces
+    this.debugCtx.strokeStyle = '#00ff00';
+    this.debugCtx.lineWidth = 1;
 
-                if (surface.position.y < 0.2) { // Consider low-altitude surfaces as floor
-    this.debugCtx.fillStyle = '#ff000040'; // Different color for floor surfaces
+    let surfaceCount = 0;
+    for (const [key, surface] of this.surfaceMap.entries()) {
+        // Project 3D surface position to debug canvas coordinates
+        const vector = surface.position.clone();
+        vector.project(this.camera);
+        
+        const debugX = (vector.x + 1) / 2 * debugWidth;
+        const debugY = -(vector.y - 1) / 2 * debugHeight;
+        
+        // Set fill color based on surface height
+        if (surface.position.y < 0.2) {
+            this.debugCtx.fillStyle = '#ff000040'; // Different color for floor surfaces
+        } else {
+            this.debugCtx.fillStyle = '#00ff0040';
+        }
+
+        if (debugX >= 0 && debugX <= debugWidth && debugY >= 0 && debugY <= debugHeight) {
+            const radius = surface.confidence * 8;
+            this.debugCtx.beginPath();
+            this.debugCtx.arc(debugX, debugY, radius, 0, 2 * Math.PI);
+            this.debugCtx.fill();
+            this.debugCtx.stroke();
+            surfaceCount++;
+        }
+    }
+    
+    // Draw surface count and info
+    this.debugCtx.fillStyle = '#ffffff';
+    this.debugCtx.font = '12px Arial';
+    this.debugCtx.fillText(`Surfaces: ${surfaceCount}`, 5, 15);
+    this.debugCtx.fillText(`Frame: ${this.frameCount}`, 5, 30);
+    
+    if (this.model && this.model.visible) {
+        this.debugCtx.fillStyle = '#00ff00';
+        this.debugCtx.fillText('Model Active', 5, 45);
+    }
 }
-                
-                let surfaceCount = 0;
-                for (const [key, surface] of this.surfaceMap.entries()) {
-                    // Project 3D surface position to debug canvas coordinates
-                    const vector = surface.position.clone();
-                    vector.project(this.camera);
-                    
-                    const debugX = (vector.x + 1) / 2 * debugWidth;
-                    const debugY = -(vector.y - 1) / 2 * debugHeight;
-                    
-                    if (debugX >= 0 && debugX <= debugWidth && debugY >= 0 && debugY <= debugHeight) {
-                        const radius = surface.confidence * 8;
-                        this.debugCtx.beginPath();
-                        this.debugCtx.arc(debugX, debugY, radius, 0, 2 * Math.PI);
-                        this.debugCtx.fill();
-                        this.debugCtx.stroke();
-                        surfaceCount++;
-                    }
-                }
-                
-                // Draw surface count and info
-                this.debugCtx.fillStyle = '#ffffff';
-                this.debugCtx.font = '12px Arial';
-                this.debugCtx.fillText(`Surfaces: ${surfaceCount}`, 5, 15);
-                this.debugCtx.fillText(`Frame: ${this.frameCount}`, 5, 30);
-                
-                if (this.model && this.model.visible) {
-                    this.debugCtx.fillStyle = '#00ff00';
-                    this.debugCtx.fillText('Model Active', 5, 45);
-                }
-            }
+// ...existing code...
 
             onWindowResize() {
                 this.camera.aspect = window.innerWidth / window.innerHeight;
@@ -1101,24 +1106,22 @@ this.model.position.add(offset);
                 }
             }
 
-            onTouchMove(event) {
-                event.preventDefault();
-                // Handle touch move for model rotation if needed
-                const up = new THREE.Vector3(0, 1, 0); // Force flat alignment
-const quaternion = new THREE.Quaternion().setFromUnitVectors(up, surface.normal);
-this.model.quaternion.copy(quaternion);
-                if (event.touches.length === 1 && this.model && this.model.visible) {
-                    const touch = event.touches[0];
-                    
-                    if (this.lastTouchX !== undefined) {
-                        const deltaX = touch.clientX - this.lastTouchX;
-                        this.model.rotation.y += deltaX * 0.01;
-                    }
-                    
-                    this.lastTouchX = touch.clientX;
-                    this.lastTouchY = touch.clientY;
-                }
-            }
+           onTouchMove(event) {
+    event.preventDefault();
+    // Handle touch move for model rotation if needed
+    if (event.touches.length === 1 && this.model && this.model.visible) {
+        const touch = event.touches[0];
+
+        if (this.lastTouchX !== undefined) {
+            const deltaX = touch.clientX - this.lastTouchX;
+            this.model.rotation.y += deltaX * 0.01;
+        }
+
+        this.lastTouchX = touch.clientX;
+        this.lastTouchY = touch.clientY;
+    }
+}
+// ...existing code...
 
             updateStatus(message) {
                 this.status.textContent = message;
