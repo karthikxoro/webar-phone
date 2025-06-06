@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AR Surface Tracking 3D Model Viewer</title>
+    <title>AR Floor Detection 3D Model Viewer</title>
     <style>
         * {
             margin: 0;
@@ -123,6 +123,11 @@
             display: block;
         }
 
+        .tracking-indicator.floor-detected {
+            border-color: #ff6b00;
+            box-shadow: 0 0 20px #ff6b00;
+        }
+
         @keyframes pulse {
             0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
             50% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.7; }
@@ -141,11 +146,16 @@
             animation: surfacePoint 2s ease-out forwards;
         }
 
+        .surface-point.floor {
+            background: #ff6b00;
+            box-shadow: 0 0 10px #ff6b00;
+        }
+
         @keyframes surfacePoint {
             0% { 
                 opacity: 1; 
                 transform: scale(1.5);
-                box-shadow: 0 0 20px #ff4444;
+                box-shadow: 0 0 20px currentColor;
             }
             50% { 
                 opacity: 0.8; 
@@ -157,10 +167,15 @@
             }
         }
 
-        .surface-grid {
+        .floor-grid {
             position: absolute;
             pointer-events: none;
             z-index: 2;
+            display: none;
+        }
+
+        .floor-grid.active {
+            display: block;
         }
 
         .placement-indicator {
@@ -175,6 +190,10 @@
             animation: placementPulse 1s ease-in-out infinite;
         }
 
+        .placement-indicator.floor-mode {
+            filter: hue-rotate(30deg);
+        }
+
         @keyframes placementPulse {
             0%, 100% { 
                 transform: scale(1); 
@@ -184,6 +203,22 @@
                 transform: scale(1.1); 
                 opacity: 1;
             }
+        }
+
+        #floorInfo {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            display: none;
+        }
+
+        #floorInfo.active {
+            display: block;
         }
     </style>
 </head>
@@ -204,6 +239,17 @@
                 <line x1="25" y1="20" x2="35" y2="20" stroke="#00ff00" stroke-width="2"/>
             </svg>
         </div>
+
+        <div class="floor-grid" id="floorGrid">
+            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+                <defs>
+                    <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
+                        <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#ff6b00" stroke-width="0.5" opacity="0.5"/>
+                    </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)" />
+            </svg>
+        </div>
         
         <div id="controls">
             <input type="file" id="fileInput" accept=".glb,.gltf" />
@@ -212,14 +258,21 @@
             <button id="toggleModel" disabled>Toggle Model</button>
             <button id="resetTracking">Reset Tracking</button>
             <button id="toggleDebug">Debug View</button>
-            <div id="status">Upload a GLB file and start AR camera for surface tracking</div>
+            <button id="toggleFloorGrid">Floor Grid</button>
+            <div id="status">Upload a GLB file and start AR camera for floor detection</div>
+        </div>
+
+        <div id="floorInfo">
+            <div id="floorStatus">Floor: Not Detected</div>
+            <div id="floorConfidence">Confidence: 0%</div>
+            <div id="floorDistance">Distance: --</div>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script>
-        class ARSurfaceTracker {
+        class ARFloorDetector {
             constructor() {
                 this.video = document.getElementById('video');
                 this.canvas = document.getElementById('canvas');
@@ -229,9 +282,15 @@
                 this.toggleModelBtn = document.getElementById('toggleModel');
                 this.resetTrackingBtn = document.getElementById('resetTracking');
                 this.toggleDebugBtn = document.getElementById('toggleDebug');
+                this.toggleFloorGridBtn = document.getElementById('toggleFloorGrid');
                 this.status = document.getElementById('status');
                 this.trackingIndicator = document.getElementById('trackingIndicator');
                 this.placementIndicator = document.getElementById('placementIndicator');
+                this.floorGrid = document.getElementById('floorGrid');
+                this.floorInfo = document.getElementById('floorInfo');
+                this.floorStatus = document.getElementById('floorStatus');
+                this.floorConfidence = document.getElementById('floorConfidence');
+                this.floorDistance = document.getElementById('floorDistance');
                 
                 this.scene = null;
                 this.camera = null;
@@ -242,13 +301,22 @@
                 this.modelVisible = true;
                 this.trackingActive = false;
                 this.debugMode = false;
+                this.floorGridVisible = false;
                 
-                // Enhanced surface tracking variables
-                this.surfaceMap = new Map(); // Store detected surfaces
-                this.surfacePoints = [];
+                // Floor detection specific variables
+                this.floorPlane = null;
+                this.floorDetected = false;
+                this.floorConfidenceValue = 0;
+                this.floorPoints = [];
+                this.floorHistory = [];
                 this.frameCount = 0;
                 this.lastTapTime = 0;
-                this.surfaceTrackingEnabled = true;
+                
+                // Floor detection parameters
+                this.floorDetectionThreshold = 0.7;
+                this.maxFloorDistance = 8;
+                this.minFloorDistance = 1;
+                this.floorNormalTolerance = 0.3; // How close to vertical (0,1,0) normal should be
                 
                 // Camera and tracking parameters
                 this.cameraIntrinsics = {
@@ -268,7 +336,7 @@
                 
                 // Setup camera with AR-appropriate settings
                 this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-                this.camera.position.set(0, 0, 0);
+                this.camera.position.set(0, 1.6, 0); // Eye level height
                 
                 // Setup renderer
                 this.renderer = new THREE.WebGLRenderer({ 
@@ -297,6 +365,9 @@
                 fillLight.position.set(-5, 3, -5);
                 this.scene.add(fillLight);
                 
+                // Create floor plane geometry for visualization
+                this.createFloorVisualization();
+                
                 // Setup debug canvas context
                 this.debugCtx = this.debugCanvas.getContext('2d');
                 
@@ -308,6 +379,24 @@
                 
                 this.animate();
             }
+
+            createFloorVisualization() {
+                // Create a large plane to represent the detected floor
+                const floorGeometry = new THREE.PlaneGeometry(20, 20);
+                const floorMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0x888888, 
+                    transparent: true, 
+                    opacity: 0.1,
+                    side: THREE.DoubleSide
+                });
+                
+                this.floorMesh = new THREE.Mesh(floorGeometry, floorMaterial);
+                this.floorMesh.rotation.x = -Math.PI / 2; // Make it horizontal
+                this.floorMesh.position.y = -2; // Below camera
+                this.floorMesh.receiveShadow = true;
+                this.floorMesh.visible = false;
+                this.scene.add(this.floorMesh);
+            }
             
             setupEventListeners() {
                 this.fileInput.addEventListener('change', (e) => this.handleFileUpload(e));
@@ -315,6 +404,7 @@
                 this.toggleModelBtn.addEventListener('click', () => this.toggleModel());
                 this.resetTrackingBtn.addEventListener('click', () => this.resetTracking());
                 this.toggleDebugBtn.addEventListener('click', () => this.toggleDebug());
+                this.toggleFloorGridBtn.addEventListener('click', () => this.toggleFloorGrid());
             }
 
             async handleFileUpload(event) {
@@ -328,7 +418,7 @@
                     await this.loadGLBModel(url);
                     this.modelLoaded = true;
                     this.toggleModelBtn.disabled = false;
-                    this.updateStatus('Model loaded! Start AR camera for surface tracking.');
+                    this.updateStatus('Model loaded! Start AR camera for floor detection.');
                     URL.revokeObjectURL(url);
                 } catch (error) {
                     this.updateStatus('Error loading model. Creating fallback cube.');
@@ -337,6 +427,24 @@
                 }
             }
             
+            // ...inside class ARFloorDetector...
+
+toggleFloorGrid() {
+    this.floorGridVisible = !this.floorGridVisible;
+    if (this.floorGridVisible) {
+        this.floorGrid.classList.add('active');
+        this.floorMesh.visible = true;
+        this.toggleFloorGridBtn.textContent = 'Hide Floor Grid';
+        this.updateStatus('Floor grid enabled');
+    } else {
+        this.floorGrid.classList.remove('active');
+        this.floorMesh.visible = false;
+        this.toggleFloorGridBtn.textContent = 'Floor Grid';
+        this.updateStatus('Floor grid disabled');
+    }
+}
+// ...existing code...
+
             async loadGLBModel(url) {
                 return new Promise((resolve, reject) => {
                     if (this.model) {
@@ -412,12 +520,12 @@
                 this.scene.add(this.model);
                 this.modelLoaded = true;
                 this.toggleModelBtn.disabled = false;
-                this.updateStatus('Fallback cube created. Start AR camera for surface tracking.');
+                this.updateStatus('Fallback cube created. Start AR camera for floor detection.');
             }
 
             async startCamera() {
                 try {
-                    this.updateStatus('Starting AR camera with enhanced surface tracking...');
+                    this.updateStatus('Starting AR camera with floor detection...');
                     
                     const constraints = {
                         video: {
@@ -441,11 +549,12 @@
                         this.startCameraBtn.classList.add('active');
                         this.trackingActive = true;
                         this.trackingIndicator.classList.add('active');
+                        this.floorInfo.classList.add('active');
                         
-                        // Initialize enhanced surface tracking
-                        this.initializeSurfaceTracking();
+                        // Initialize floor detection
+                        this.initializeFloorDetection();
                         
-                        this.updateStatus('AR active! Tap anywhere to place the 3D model on detected surfaces.');
+                        this.updateStatus('AR active! Move device to detect floor, then tap to place model.');
                     };
                     
                 } catch (error) {
@@ -454,9 +563,9 @@
                 }
             }
 
-            initializeSurfaceTracking() {
-                // Start continuous surface detection
-                this.continuousSurfaceDetection();
+            initializeFloorDetection() {
+                // Start continuous floor detection
+                this.continuousFloorDetection();
                 
                 // Update camera intrinsics based on actual video dimensions
                 this.updateCameraIntrinsics();
@@ -474,103 +583,232 @@
                 };
             }
 
-            continuousSurfaceDetection() {
+            continuousFloorDetection() {
                 if (!this.trackingActive) return;
                 
                 this.frameCount++;
                 
-                // Perform surface detection every few frames
-                if (this.frameCount % 10 === 0 && this.video.readyState === 4) {
-                    this.detectSurfacesInFrame();
+                // Perform floor detection every few frames
+                if (this.frameCount % 5 === 0 && this.video.readyState === 4) {
+                    this.detectFloorInFrame();
                 }
                 
                 // Continue detection loop
-                requestAnimationFrame(() => this.continuousSurfaceDetection());
+                requestAnimationFrame(() => this.continuousFloorDetection());
             }
 
-            detectSurfacesInFrame() {
-                // Simulate multi-point surface detection
+            detectFloorInFrame() {
+                // Sample multiple points in the lower portion of the screen for floor detection
                 const screenWidth = window.innerWidth;
                 const screenHeight = window.innerHeight;
                 
-                // Sample multiple points across the screen
-                const samplePoints = [
-                    { x: screenWidth * 0.3, y: screenHeight * 0.4 },
-                    { x: screenWidth * 0.5, y: screenHeight * 0.6 },
-                    { x: screenWidth * 0.7, y: screenHeight * 0.4 },
-                    { x: screenWidth * 0.4, y: screenHeight * 0.7 },
-                    { x: screenWidth * 0.6, y: screenHeight * 0.7 }
+                // Focus on lower 60% of screen where floor is likely to be
+                const floorSamplePoints = [
+                    { x: screenWidth * 0.2, y: screenHeight * 0.7 },
+                    { x: screenWidth * 0.4, y: screenHeight * 0.8 },
+                    { x: screenWidth * 0.5, y: screenHeight * 0.85 },
+                    { x: screenWidth * 0.6, y: screenHeight * 0.8 },
+                    { x: screenWidth * 0.8, y: screenHeight * 0.7 },
+                    { x: screenWidth * 0.3, y: screenHeight * 0.9 },
+                    { x: screenWidth * 0.7, y: screenHeight * 0.9 }
                 ];
                 
-                samplePoints.forEach((point, index) => {
-                    const surfaceData = this.estimateSurfaceAtPoint(point.x, point.y);
-                    if (surfaceData) {
-                        this.surfaceMap.set(`surface_${index}`, {
-                            position: surfaceData.position,
-                            normal: surfaceData.normal,
-                            confidence: surfaceData.confidence,
-                            timestamp: Date.now()
-                        });
+                const candidateFloorPoints = [];
+                
+                floorSamplePoints.forEach(point => {
+                    const floorCandidate = this.estimateFloorAtPoint(point.x, point.y);
+                    if (floorCandidate && this.isLikelyFloor(floorCandidate)) {
+                        candidateFloorPoints.push(floorCandidate);
                     }
                 });
                 
-                // Clean old surface data
-                this.cleanOldSurfaceData();
+                // Analyze candidate points to determine best floor plane
+                if (candidateFloorPoints.length >= 3) {
+                    const floorPlane = this.calculateBestFloorPlane(candidateFloorPoints);
+                    if (floorPlane) {
+                        this.updateFloorDetection(floorPlane);
+                    }
+                } else {
+                    this.floorConfidenceValue = Math.max(0, this.floorConfidenceValue - 0.02);
+                    if (this.floorConfidenceValue < this.floorDetectionThreshold) {
+                        this.floorDetected = false;
+                    }
+                }
+                
+                this.updateFloorUI();
             }
 
-            estimateSurfaceAtPoint(screenX, screenY) {
+            estimateFloorAtPoint(screenX, screenY) {
                 // Convert screen coordinates to normalized device coordinates
                 const mouse = new THREE.Vector2();
                 mouse.x = (screenX / window.innerWidth) * 2 - 1;
                 mouse.y = -(screenY / window.innerHeight) * 2 + 1;
                 
-                // Create raycaster
+                // Create raycaster from camera through point
                 const raycaster = new THREE.Raycaster();
                 raycaster.setFromCamera(mouse, this.camera);
                 
-                // Estimate surface depth based on screen position and some heuristics
-                let estimatedDepth = 3 + Math.random() * 4; // 3-7 units away
+                // Bias towards floor-like distances and positions
+                let estimatedDepth;
                 
-                // Adjust depth based on screen position (surfaces closer to center are typically closer)
-                const centerDistance = Math.sqrt(Math.pow(mouse.x, 2) + Math.pow(mouse.y, 2));
-                estimatedDepth += centerDistance * 2;
+                // Use screen Y position to estimate depth (lower on screen = closer to camera)
+                const screenYNormalized = screenY / window.innerHeight;
+                if (screenYNormalized > 0.8) {
+                    // Very bottom of screen - likely close floor
+                    estimatedDepth = this.minFloorDistance + Math.random() * 2;
+                } else if (screenYNormalized > 0.6) {
+                    // Lower portion - medium distance floor
+                    estimatedDepth = 2 + Math.random() * 4;
+                } else {
+                    // Not likely to be floor
+                    return null;
+                }
                 
                 // Calculate 3D position
                 const direction = raycaster.ray.direction.clone();
-                const position = raycaster.ray.origin.clone().add(direction.multiplyScalar(estimatedDepth));
+                const worldPosition = raycaster.ray.origin.clone().add(direction.multiplyScalar(estimatedDepth));
                 
-                // Add some noise for realistic variation
-                position.x += (Math.random() - 0.5) * 0.3;
-                position.y += (Math.random() - 0.5) * 0.2;
-                position.z += (Math.random() - 0.5) * 0.3;
+                // Ensure the point is below camera level (floor should be below us)
+                if (worldPosition.y > this.camera.position.y - 0.5) {
+                    worldPosition.y = this.camera.position.y - 1 - Math.random() * 2;
+                }
                 
-                // Estimate surface normal (assuming mostly horizontal surfaces)
+                // Generate floor-like normal (mostly pointing up)
                 const normal = new THREE.Vector3(
-                    (Math.random() - 0.5) * 0.3,
-                    0.8 + Math.random() * 0.2,
-                    (Math.random() - 0.5) * 0.3
+                    (Math.random() - 0.5) * this.floorNormalTolerance,
+                    0.9 + Math.random() * 0.1,
+                    (Math.random() - 0.5) * this.floorNormalTolerance
                 ).normalize();
                 
                 return {
-                    position: position,
+                    position: worldPosition,
                     normal: normal,
-                    confidence: 0.7 + Math.random() * 0.3
+                    confidence: 0.8 + Math.random() * 0.2,
+                    screenX: screenX,
+                    screenY: screenY
                 };
             }
 
-            cleanOldSurfaceData() {
-                const now = Date.now();
-                const maxAge = 5000; // 5 seconds
+            isLikelyFloor(candidate) {
+                // Check if the candidate point represents a likely floor surface
                 
-                for (const [key, surface] of this.surfaceMap.entries()) {
-                    if (now - surface.timestamp > maxAge) {
-                        this.surfaceMap.delete(key);
+                // 1. Should be below camera
+                if (candidate.position.y > this.camera.position.y - 0.3) {
+                    return false;
+                }
+                
+                // 2. Normal should be mostly pointing up
+                const upDot = candidate.normal.dot(new THREE.Vector3(0, 1, 0));
+                if (upDot < (1 - this.floorNormalTolerance)) {
+                    return false;
+                }
+                
+                // 3. Distance should be reasonable
+                const distance = candidate.position.distanceTo(this.camera.position);
+                if (distance < this.minFloorDistance || distance > this.maxFloorDistance) {
+                    return false;
+                }
+                
+                // 4. Should be in lower part of screen
+                const screenYNormalized = candidate.screenY / window.innerHeight;
+                if (screenYNormalized < 0.6) {
+                    return false;
+                }
+                
+                return true;
+            }
+
+            calculateBestFloorPlane(candidatePoints) {
+                if (candidatePoints.length < 3) return null;
+                
+                // Use least squares fitting to find best plane
+                // For simplicity, we'll average the positions and normals
+                let avgPosition = new THREE.Vector3();
+                let avgNormal = new THREE.Vector3();
+                let totalConfidence = 0;
+                
+                candidatePoints.forEach(point => {
+                    avgPosition.add(point.position.clone().multiplyScalar(point.confidence));
+                    avgNormal.add(point.normal.clone().multiplyScalar(point.confidence));
+                    totalConfidence += point.confidence;
+                });
+                
+                if (totalConfidence > 0) {
+                    avgPosition.divideScalar(totalConfidence);
+                    avgNormal.divideScalar(totalConfidence).normalize();
+                    
+                    // Calculate plane equation: ax + by + cz + d = 0
+                    const d = -avgNormal.dot(avgPosition);
+                    
+                    return {
+                        position: avgPosition,
+                        normal: avgNormal,
+                        d: d,
+                        confidence: Math.min(1.0, totalConfidence / candidatePoints.length),
+                        pointCount: candidatePoints.length
+                    };
+                }
+                
+                return null;
+            }
+
+            updateFloorDetection(floorPlane) {
+                this.floorPlane = floorPlane;
+                this.floorConfidenceValue = Math.min(1.0, 
+                    this.floorConfidenceValue * 0.9 + floorPlane.confidence * 0.1
+                );
+                
+                // Update floor history for stability
+                this.floorHistory.push(floorPlane);
+                if (this.floorHistory.length > 10) {
+                    this.floorHistory.shift();
+                }
+                
+                // Determine if floor is reliably detected
+                if (this.floorConfidenceValue > this.floorDetectionThreshold) {
+                    this.floorDetected = true;
+                    
+                    // Update floor mesh visualization
+                    this.floorMesh.position.copy(floorPlane.position);
+                    this.floorMesh.lookAt(
+                        floorPlane.position.clone().add(floorPlane.normal)
+                    );
+                    
+                    // Show floor grid if enabled
+                    if (this.floorGridVisible) {
+                        this.floorMesh.visible = true;
                     }
+                    
+                    // Update tracking indicator
+                    this.trackingIndicator.classList.add('floor-detected');
+                } else {
+                    this.floorDetected = false;
+                    this.trackingIndicator.classList.remove('floor-detected');
+                }
+            }
+
+            updateFloorUI() {
+                // Update floor status display
+                if (this.floorDetected) {
+                    this.floorStatus.textContent = 'Floor: Detected';
+                    this.floorStatus.style.color = '#00ff00';
+                } else {
+                    this.floorStatus.textContent = 'Floor: Searching...';
+                    this.floorStatus.style.color = '#ffaa00';
+                }
+                
+                this.floorConfidence.textContent = `Confidence: ${Math.round(this.floorConfidenceValue * 100)}%`;
+                
+                if (this.floorPlane) {
+                    const distance = this.floorPlane.position.distanceTo(this.camera.position);
+                    this.floorDistance.textContent = `Distance: ${distance.toFixed(1)}m`;
+                } else {
+                    this.floorDistance.textContent = 'Distance: --';
                 }
             }
 
             onMouseMove(event) {
-                if (!this.trackingActive || !this.surfaceTrackingEnabled) return;
+                if (!this.trackingActive) return;
                 
                 const rect = this.canvas.getBoundingClientRect();
                 const x = event.clientX - rect.left;
@@ -890,7 +1128,7 @@ this.model.quaternion.copy(quaternion);
         
         // Initialize the AR application when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            const app = new ARSurfaceTracker();
+            const app = new ARFloorDetector();
         });
     </script>
 </body>
